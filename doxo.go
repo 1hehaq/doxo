@@ -56,7 +56,7 @@ func init() {
 		fmt.Printf("\n%susage%s:\n", red, reset)
 		fmt.Printf("  %sdoxo%s [flags] [message]\n\n", discord, reset)
 		fmt.Printf("%sFlags%s:\n", red, reset)
-		fmt.Printf("  %-12s %s\n", fmt.Sprintf(" %s-%s%s   :", discord, "config", reset), "path to config file (default: ~/.doxo/doxo.json)")
+		fmt.Printf("  %-12s %s\n", fmt.Sprintf(" %s-%s%s   :", discord, "config", reset), "path to config file (default: ~/.doxo/config.json)")
 		fmt.Printf("  %-12s %s\n", fmt.Sprintf(" %s-%s%s      :", discord, "txt", reset), "send output as text file")
 		fmt.Printf("  %-12s %s\n", fmt.Sprintf(" %s-%s%s    :", discord, "plain", reset), "send as plain text message")
 		fmt.Printf("  %-12s %s\n", fmt.Sprintf(" %s-%s%s      :", discord, "tts", reset), "send message with text-to-speech enabled")
@@ -65,7 +65,7 @@ func init() {
 }
 
 func main() {
-	configFlag := flag.String("config", "", "path to config file (default: ~/.doxo/doxo.json)")
+	configFlag := flag.String("config", "", "path to config file (default: ~/.doxo/config.json)")
 	txtFlag := flag.Bool("txt", false, "send output as text file")
 	plainFlag := flag.Bool("plain", false, "send as plain text message")
 	ttsFlag := flag.Bool("tts", false, "send message with text-to-speech enabled")
@@ -81,16 +81,24 @@ func main() {
 	configPath := *configFlag
 	if configPath == "" {
 		if path, err := ioutil.ReadFile("/tmp/doxo_path"); err == nil {
-			configPath = string(path)
+			configPath = strings.TrimSpace(string(path))
 		} else {
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, white+"["+discord+"doxo"+white+"] "+red+"Error getting home dir: %v\n"+reset, err)
 				os.Exit(1)
 			}
-			configPath = filepath.Join(homeDir, ".doxo", "doxo.json")
+			configPath = filepath.Join(homeDir, ".doxo", "config.json")
 		}
 	} else {
+		if strings.HasPrefix(configPath, "~/") {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, white+"["+discord+"doxo"+white+"] "+red+"Error getting home dir: %v\n"+reset, err)
+				os.Exit(1)
+			}
+			configPath = filepath.Join(homeDir, strings.TrimPrefix(configPath, "~/"))
+		}
 		ioutil.WriteFile("/tmp/doxo_path", []byte(configPath), 0644)
 	}
 
@@ -116,31 +124,28 @@ func main() {
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) == 0 {
 		scanner := bufio.NewScanner(os.Stdin)
+		var lines []string
 		for scanner.Scan() {
-			line := scanner.Text()
-			content += line + "\n"
+			lines = append(lines, scanner.Text())
 		}
+		content = strings.Join(lines, "\n")
 
 		if err := scanner.Err(); err != nil {
 			fmt.Fprintf(os.Stderr, white+"["+discord+"doxo"+white+"] "+red+"Error reading input: %v\n"+reset, err)
 			os.Exit(1)
 		}
+	} else if len(flag.Args()) > 0 {
+		content = strings.Join(flag.Args(), " ")
 	} else {
-		if *plainFlag || *txtFlag || *ttsFlag {
-			content = strings.Join(flag.Args(), " ")
-		} else {
-			fmt.Fprintf(os.Stderr, white+"["+discord+"doxo"+white+"] "+red+"no input provided. stdin or use doxo flags!\n"+reset)
-			os.Exit(1)
-		}
+		fmt.Fprintf(os.Stderr, white+"["+discord+"doxo"+white+"] "+red+"no input provided. use stdin pipe or doxo's flags!\n"+reset)
+		os.Exit(1)
 	}
 
 	var sendErr error
 	if *txtFlag {
 		sendErr = sendAsFile(config.WebhookURL, content)
-	} else if *plainFlag || *ttsFlag {
-		sendErr = sendToDiscord(config.WebhookURL, content, *ttsFlag)
 	} else {
-		sendErr = sendToDiscord(config.WebhookURL, content, false)
+		sendErr = sendToDiscord(config.WebhookURL, content, *ttsFlag)
 	}
 
 	if sendErr != nil {
@@ -156,7 +161,8 @@ func loadConfig(configPath string) (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			showBanner()
-			if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			dirPath := filepath.Dir(configPath)
+			if err := os.MkdirAll(dirPath, 0755); err != nil {
 				return Config{}, fmt.Errorf("white["+discord+"doxo"+white+"] "+red+"failed to create config directory: %v"+reset, err)
 			}
 
